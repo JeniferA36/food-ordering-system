@@ -58,16 +58,15 @@ const ApiService = {
 
         const cleanEmail = (email || "").trim().toLowerCase();
 
-        // Admin account
-        if (cleanEmail === "admin@foodorder.com") {
-            if (password !== "admin123" && password !== "Admin#Secret99!Key") {
-                return { success: false, message: "Invalid password for Admin. Use: admin123 (or Admin#Secret99!Key)" };
+        // Admin account (accepts ID 'admin' or email 'admin@foodorder.com')
+        if (cleanEmail === "admin@foodorder.com" || cleanEmail === "admin") {
+            if (password !== "admin123" && password !== "admin" && password !== "Admin#Secret99!Key") {
+                return { success: false, message: "Invalid password for Admin. Please check credentials." };
             }
             const adminUser = {
                 id: 2,
-                name: "Alex Admin",
+                name: "Admin",
                 email: "admin@foodorder.com",
-                phone: "+1 (555) 0999",
                 roles: ["ROLE_ADMIN", "ROLE_CUSTOMER"]
             };
             this.token = "demo-jwt-admin-token";
