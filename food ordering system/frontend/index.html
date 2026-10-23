@@ -12,7 +12,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     
     <!-- CSS -->
-    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/styles.css?v=12.0">
 </head>
 <body>
 
@@ -39,7 +39,9 @@
 
             <div class="nav-actions">
                 <div id="user-nav-action">
-                    <button class="btn-nav-orders" onclick="openAuthModal()">Sign In</button>
+                    <button class="btn-nav-orders" onclick="openAuthModal()" title="Admin Login with ID & Password">
+                        👑 Admin Login
+                    </button>
                 </div>
 
                 <button class="btn-cart" onclick="toggleCartDrawer(true)" id="btn-cart-toggle">
@@ -146,12 +148,40 @@
     <div class="cart-backdrop" id="cart-backdrop" onclick="toggleCartDrawer(false)"></div>
     <aside class="cart-drawer" id="cart-drawer" aria-label="Shopping Cart">
         <div class="cart-header">
-            <h2 class="cart-title">🛒 Your Order</h2>
-            <button class="btn-close-drawer" onclick="toggleCartDrawer(false)">✕</button>
+            <div>
+                <h2 class="cart-title">🛒 Your Order</h2>
+                <div class="cart-scroll-hint" id="cart-scroll-hint" style="font-size: 0.78rem; color: var(--primary); margin-top: 3px; font-weight: 600;">
+                    ↕ Scroll down straight line to view all items
+                </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <button class="btn-clear-cart" onclick="clearCart()" title="Clear all items" style="background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-sm); padding: 0.35rem 0.65rem; font-size: 0.75rem; cursor: pointer; font-weight: 600;">🗑️ Clear</button>
+                <button class="btn-close-drawer" onclick="toggleCartDrawer(false)">✕</button>
+            </div>
         </div>
 
-        <div class="cart-items-list" id="cart-items-container">
-            <!-- Cart items rendered dynamically -->
+        <!-- Straight line scroll progress track -->
+        <div class="cart-scroll-indicator-bar" id="cart-scroll-indicator-bar" style="height: 3px; background: rgba(255, 255, 255, 0.08); width: 100%; overflow: hidden; display: none;">
+            <div id="cart-scroll-line-fill" style="height: 100%; width: 25%; background: linear-gradient(90deg, var(--primary), #22c55e); transition: width 0.1s ease;"></div>
+        </div>
+
+        <div class="cart-scroll-container">
+            <div class="cart-items-list" id="cart-items-container">
+                <!-- Cart items rendered dynamically -->
+            </div>
+
+            <!-- Fully functioning custom scroll rail with prominent working buttons -->
+            <div class="custom-scroll-rail" id="custom-scroll-rail">
+                <button type="button" class="rail-scroll-btn rail-btn-up" id="rail-btn-up" title="Scroll Up" aria-label="Scroll Up" onclick="scrollCartItems(-140)">
+                    ▲
+                </button>
+                <div class="rail-track" id="rail-track" title="Click or drag to scroll">
+                    <div class="rail-thumb" id="rail-thumb"></div>
+                </div>
+                <button type="button" class="rail-scroll-btn rail-btn-down" id="rail-btn-down" title="Scroll Down" aria-label="Scroll Down" onclick="scrollCartItems(140)">
+                    ▼
+                </button>
+            </div>
         </div>
 
         <div class="cart-footer" id="cart-footer" style="display: none;">
@@ -196,33 +226,57 @@
                 <h2>⚡ Finalize Delivery</h2>
                 <button class="btn-close-drawer" onclick="closeCheckoutModal()">✕</button>
             </div>
-            <form class="modal-body" onsubmit="submitOrder(event)">
+            <form class="modal-body" onsubmit="submitOrder(event); return false;">
                 <div class="form-group">
                     <label class="form-label" for="checkout-address">Delivery Address *</label>
                     <input type="text" id="checkout-address" class="form-control" placeholder="Apartment, Street address, City" required value="Flat 402, Prestige Palms, 100ft Road, Indiranagar, Bengaluru">
                 </div>
 
                 <div class="form-group">
-                    <label class="form-label" for="checkout-notes">Delivery Instructions / Landmark</label>
-                    <textarea id="checkout-notes" class="form-control" rows="2" placeholder="Leave at door, ring bell, contact number..."></textarea>
+                    <label class="form-label">Delivery Instructions / Landmark</label>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <label id="inst-label-door" class="payment-label" style="flex: 1; padding: 0.75rem 0.35rem; background: var(--bg-surface-elevated); border: 2px solid var(--border-subtle); border-radius: var(--radius-md); cursor: pointer; text-align: center; font-size: 0.82rem; font-weight: 600;">
+                            <input type="radio" name="delivery_instruction" value="Leave at door" onchange="onDeliveryInstructionChange(this)"> 🚪 Leave at door
+                        </label>
+                        <label id="inst-label-bell" class="payment-label payment-active" style="flex: 1; padding: 0.75rem 0.35rem; background: var(--bg-surface-elevated); border: 2px solid var(--border-subtle); border-radius: var(--radius-md); cursor: pointer; text-align: center; font-size: 0.82rem; font-weight: 600;">
+                            <input type="radio" name="delivery_instruction" value="Ring bell" checked onchange="onDeliveryInstructionChange(this)"> 🔔 Ring bell
+                        </label>
+                        <label id="inst-label-contact" class="payment-label" style="flex: 1; padding: 0.75rem 0.35rem; background: var(--bg-surface-elevated); border: 2px solid var(--border-subtle); border-radius: var(--radius-md); cursor: pointer; text-align: center; font-size: 0.82rem; font-weight: 600;">
+                            <input type="radio" name="delivery_instruction" value="Contact number" onchange="onDeliveryInstructionChange(this)"> 📞 Contact number
+                        </label>
+                    </div>
+                    <input type="hidden" id="checkout-notes" value="Ring bell">
                 </div>
 
                 <div class="form-group">
                     <label class="form-label">Payment Method</label>
                     <div style="display: flex; gap: 0.75rem;">
-                        <label style="flex: 1; padding: 0.75rem; background: var(--bg-surface-elevated); border: 1px solid var(--primary); border-radius: var(--radius-md); cursor: pointer; text-align: center; font-size: 0.85rem; font-weight: 700;">
-                            <input type="radio" name="payment" checked> 📱 UPI / GPay
+                        <label id="pay-label-upi" class="payment-label payment-active" style="flex: 1; padding: 0.75rem; background: var(--bg-surface-elevated); border: 2px solid var(--border-subtle); border-radius: var(--radius-md); cursor: pointer; text-align: center; font-size: 0.85rem; font-weight: 700;">
+                            <input type="radio" name="payment" value="upi" checked onchange="onPaymentMethodChange(this)"> 📱 UPI / GPay
                         </label>
-                        <label style="flex: 1; padding: 0.75rem; background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); cursor: pointer; text-align: center; font-size: 0.85rem;">
-                            <input type="radio" name="payment"> 💳 Card
-                        </label>
-                        <label style="flex: 1; padding: 0.75rem; background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); cursor: pointer; text-align: center; font-size: 0.85rem;">
-                            <input type="radio" name="payment"> 💵 Cash on Delivery
+                        <label id="pay-label-cod" class="payment-label" style="flex: 1; padding: 0.75rem; background: var(--bg-surface-elevated); border: 2px solid var(--border-subtle); border-radius: var(--radius-md); cursor: pointer; text-align: center; font-size: 0.85rem;">
+                            <input type="radio" name="payment" value="cod" onchange="onPaymentMethodChange(this)"> 💵 Cash on Delivery
                         </label>
                     </div>
                 </div>
 
-                <button type="submit" class="btn-checkout" style="margin-top: 1rem;">
+                <!-- QR Code Panel (shown for UPI online payments: shows real scannable QR code) -->
+                <div id="qr-payment-panel" class="qr-payment-panel">
+                    <div class="qr-panel-header">
+                        <span class="qr-panel-title">📲 Scan QR Code to Pay</span>
+                        <span class="qr-amount-badge">Amount: <strong id="qr-amount-display">₹0.00</strong></span>
+                    </div>
+                    <div class="qr-code-wrapper" id="qr-code-wrapper">
+                        <div id="qr-code-box" style="display: flex; justify-content: center; align-items: center; min-height: 170px;">
+                            <img id="qr-code-img" src="images/upi_qr.png" alt="UPI QR Code" class="qr-code-img">
+                        </div>
+                    </div>
+                    <div style="text-align: center; margin-top: 0.4rem; font-size: 0.75rem; color: var(--text-muted);">
+                        Scan with Google Pay, PhonePe, Paytm or any UPI scanner
+                    </div>
+                </div>
+
+                <button type="button" class="btn-checkout" onclick="submitOrder(event)" style="margin-top: 1rem;">
                     Confirm & Place Order
                 </button>
             </form>
@@ -256,6 +310,13 @@
                 <!-- Stepper corresponding to backend OrderStatus state machine -->
                 <div class="tracking-stepper">
                     <div class="tracking-progress-line" id="track-progress-line" style="width: 25%;"></div>
+                    <div class="delivery-runner" id="delivery-runner" style="display: none;">
+                        <div class="runner-bubble">
+                            <span class="runner-icon">🏃‍♂️</span>
+                            <span class="runner-pack">📦</span>
+                        </div>
+                        <div class="runner-pin-pointer"></div>
+                    </div>
 
                     <div class="step-node completed" id="step-placed">
                         <div class="step-icon">📋</div>
@@ -297,82 +358,118 @@
                         <strong id="track-total" style="color: var(--accent-emerald); font-size: 1.1rem;">₹0.00</strong>
                     </div>
                 </div>
+
+                <!-- Scrollable Ordered Dishes Section so customer can scroll to see what they ordered -->
+                <div class="tracker-items-card">
+                    <div class="tracker-items-header">
+                        <span style="font-weight: 700; font-size: 0.88rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.4rem;">
+                            <span>📦 Dishes in this Order</span>
+                            <span id="tracker-items-count" style="font-size: 0.75rem; color: var(--text-muted);">(0)</span>
+                        </span>
+                        <div class="tracker-scroll-btns">
+                            <button type="button" class="tracker-scroll-btn" onclick="scrollTrackerItems(-80)" title="Scroll Dishes Up">▲</button>
+                            <button type="button" class="tracker-scroll-btn" onclick="scrollTrackerItems(80)" title="Scroll Dishes Down">▼</button>
+                        </div>
+                    </div>
+                    <!-- Straight line scroll indicator -->
+                    <div class="tracker-scroll-line" id="tracker-scroll-line">
+                        <div class="tracker-scroll-fill" id="tracker-scroll-fill"></div>
+                    </div>
+                    <div class="tracker-items-list" id="track-items-container">
+                        <!-- Populated by renderOrderTracking -->
+                    </div>
+                </div>
+
+                <!-- Cancel Order button -->
+                <button id="btn-cancel-order" class="btn-cancel-order" onclick="cancelOrder()" style="display:none;">
+                    ❌ Cancel Order (50% Refund)
+                </button>
+
+                <!-- Order Delivered action box -->
+                <div id="delivered-actions-box" style="margin-top: 1.25rem; padding: 1.15rem; background: rgba(34, 197, 94, 0.12); border: 1.5px solid rgba(34, 197, 94, 0.4); border-radius: var(--radius-md); text-align: center; display: none;">
+                    <div style="font-size: 1.15rem; font-weight: 800; color: #22c55e; margin-bottom: 0.35rem;">🎉 Order Delivered! Bon Appétit!</div>
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.85rem;">Your dishes have arrived. Menu items have been reset to <strong>+ ADD</strong> so you can place your next order!</p>
+                    <button class="btn-checkout" onclick="closeOrderTrackerModal()" style="padding: 0.75rem 1.5rem; font-size: 0.92rem; width: 100%;">
+                        Order More Dishes (+ ADD) →
+                    </button>
+                </div>
+
+                <!-- Order Cancelled action box with 50% Refund Details -->
+                <div id="cancelled-actions-box" style="margin-top: 1.25rem; padding: 1.15rem; background: rgba(239, 68, 68, 0.12); border: 1.5px solid rgba(239, 68, 68, 0.35); border-radius: var(--radius-md); text-align: center; display: none;">
+                    <div style="font-size: 1.15rem; font-weight: 800; color: #f87171; margin-bottom: 0.35rem;">❌ Order Cancelled (50% Refund Initiated)</div>
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">Your 50% refund of <strong id="track-refund-amount" style="color: var(--accent-emerald); font-size: 1rem;">₹0.00</strong> has been processed and will be credited to your account in 3–5 business days.</p>
+                    <button class="btn-checkout" onclick="closeOrderTrackerModal()" style="padding: 0.75rem 1.5rem; font-size: 0.92rem; width: 100%;">
+                        Order More Dishes (+ ADD) →
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- ==========================================
-         Sign In / User Modal
+         Cancel Order Confirm Modal
+         ========================================== -->
+    <div class="modal-overlay" id="cancel-confirm-modal">
+        <div class="modal-content" style="max-width: 420px;">
+            <div class="modal-header">
+                <h2>❌ Cancel Order?</h2>
+                <button class="btn-close-drawer" onclick="closeCancelModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="cancel-refund-info">
+                    <div class="cancel-icon-big">🔄</div>
+                    <h3>Order <span id="cancel-order-id" style="color: var(--primary);"></span> Cancellation</h3>
+                    <p style="color: var(--text-secondary); margin: 0.75rem 0;">Since your order is already being processed, a <strong style="color: var(--accent-emerald);">50% refund</strong> will be credited back to your payment method within <strong>3–5 business days</strong>.</p>
+                    <div class="refund-amount-box">
+                        <span style="color: var(--text-muted); font-size: 0.85rem;">REFUND AMOUNT</span>
+                        <div class="refund-amount-value" id="cancel-refund-amount">₹0.00</div>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+                    <button class="category-chip" onclick="closeCancelModal()" style="flex: 1; justify-content: center; padding: 0.85rem;">
+                        Keep Order
+                    </button>
+                    <button class="btn-cancel-confirm" onclick="confirmCancelOrder()" style="flex: 1;">
+                        Yes, Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==========================================
+         Admin Sign In Modal (Admin Only)
          ========================================== -->
     <div class="modal-overlay" id="auth-modal">
-        <div class="modal-content" style="max-width: 490px;">
+        <div class="modal-content" style="max-width: 400px;">
             <div class="modal-header">
-                <h2>👤 Sign In / Login</h2>
+                <h2>👑 Admin Login</h2>
                 <button class="btn-close-drawer" onclick="closeAuthModal()">✕</button>
             </div>
             <div class="modal-body">
-                <!-- Example Login Accounts Card -->
-                <div class="demo-accounts-box">
-                    <div class="demo-accounts-title">
-                        <span>🔑 Quick Demo Accounts (Click to Auto-Login)</span>
-                    </div>
-                    <div class="demo-account-cards">
-                        <!-- Admin Card -->
-                        <div class="demo-account-card admin-card" onclick="quickLogin('admin@foodorder.com', 'admin123')" title="Click to auto-fill & login as Admin">
-                            <div class="demo-account-header">
-                                <span class="role-pill admin-pill">👑 Admin Account</span>
-                            </div>
-                            <div class="demo-credential-row">
-                                <span class="cred-label">Email:</span>
-                                <code class="cred-value">admin@foodorder.com</code>
-                            </div>
-                            <div class="demo-credential-row">
-                                <span class="cred-label">Password:</span>
-                                <code class="cred-value">admin123</code>
-                            </div>
-                            <button type="button" class="btn-quick-fill">Log In as Admin ➔</button>
-                        </div>
-
-                        <!-- Customer Card -->
-                        <div class="demo-account-card customer-card" onclick="quickLogin('customer@foodorder.com', 'user123')" title="Click to auto-fill & login as Customer">
-                            <div class="demo-account-header">
-                                <span class="role-pill customer-pill">👤 Customer Account</span>
-                            </div>
-                            <div class="demo-credential-row">
-                                <span class="cred-label">Email:</span>
-                                <code class="cred-value">customer@foodorder.com</code>
-                            </div>
-                            <div class="demo-credential-row">
-                                <span class="cred-label">Password:</span>
-                                <code class="cred-value">user123</code>
-                            </div>
-                            <button type="button" class="btn-quick-fill">Log In as Customer ➔</button>
-                        </div>
-                    </div>
+                <div style="text-align: center; margin-bottom: 1.5rem; padding: 1rem 0 0.5rem;">
+                    <div style="font-size: 2.8rem; margin-bottom: 0.6rem;">🔐</div>
+                    <p style="color: var(--text-secondary); font-size: 0.88rem; line-height: 1.5;">Restricted access — administrators only.<br>Enter your Admin ID and password to continue.</p>
                 </div>
 
-                <div class="auth-divider">
-                    <span>or enter credentials manually</span>
-                </div>
-
-                <form onsubmit="submitAuthForm(event)" autocomplete="off">
+                <form onsubmit="submitAdminLogin(event)" autocomplete="off">
                     <div class="form-group">
-                        <label class="form-label" for="auth-email">Email Address</label>
-                        <input type="email" id="auth-email" class="form-control" required placeholder="admin@foodorder.com or customer@foodorder.com" autocomplete="email">
+                        <label class="form-label" for="admin-id-input">Admin ID</label>
+                        <input type="text" id="admin-id-input" class="form-control" required placeholder="Enter Admin ID" autocomplete="off">
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="auth-password">Password</label>
+                        <label class="form-label" for="admin-pwd-input">Password</label>
                         <div style="position: relative;">
-                            <input type="password" id="auth-password" class="form-control" required placeholder="Enter password (e.g. admin123 or user123)" autocomplete="current-password" style="padding-right: 2.75rem;">
-                            <button type="button" onclick="togglePasswordVisibility()" title="Show/Hide Password" style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.1rem; padding: 0.2rem;">
-                                <span id="toggle-pwd-icon">👁️</span>
+                            <input type="password" id="admin-pwd-input" class="form-control" required placeholder="Enter admin password" autocomplete="current-password" style="padding-right: 2.75rem;">
+                            <button type="button" onclick="toggleAdminPwd()" title="Show/Hide Password" style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.1rem; padding: 0.2rem;">
+                                <span id="admin-pwd-icon">👁️</span>
                             </button>
                         </div>
                     </div>
 
                     <button type="submit" class="btn-checkout" style="margin-top: 1.25rem; width: 100%;">
-                        Sign In
+                        Sign In as Admin →
                     </button>
                 </form>
             </div>
@@ -481,14 +578,18 @@
                         <input type="text" id="edit-item-image" class="form-control" placeholder="images/... or https://...">
                     </div>
 
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-top: 0.5rem;">
                         <div class="form-group" style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0;">
                             <input type="checkbox" id="edit-item-is-veg" style="width: 18px; height: 18px; accent-color: var(--accent-emerald); cursor: pointer;">
-                            <label for="edit-item-is-veg" style="font-size: 0.9rem; font-weight: 600; cursor: pointer; color: var(--text-primary); margin-bottom: 0;">🥦 Vegetarian Dish</label>
+                            <label for="edit-item-is-veg" style="font-size: 0.9rem; font-weight: 600; cursor: pointer; color: var(--text-primary); margin-bottom: 0;">🥦 Vegetarian</label>
                         </div>
                         <div class="form-group" style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0;">
                             <input type="checkbox" id="edit-item-is-special" style="width: 18px; height: 18px; accent-color: var(--accent-amber); cursor: pointer;">
                             <label for="edit-item-is-special" style="font-size: 0.9rem; font-weight: 600; cursor: pointer; color: var(--text-primary); margin-bottom: 0;">★ Chef Special</label>
+                        </div>
+                        <div class="form-group" style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0;">
+                            <input type="checkbox" id="edit-item-available" checked style="width: 18px; height: 18px; accent-color: #22c55e; cursor: pointer;">
+                            <label for="edit-item-available" style="font-size: 0.9rem; font-weight: 600; cursor: pointer; color: var(--text-primary); margin-bottom: 0;">✔ Available</label>
                         </div>
                     </div>
 
@@ -572,8 +673,9 @@
     <div class="toast-container" id="toast-container"></div>
 
     <!-- JavaScript Files -->
-    <script src="js/data.js"></script>
-    <script src="js/api.js"></script>
-    <script src="js/app.js"></script>
+    <script src="js/qrcode.min.js"></script>
+    <script src="js/data.js?v=12.0"></script>
+    <script src="js/api.js?v=12.0"></script>
+    <script src="js/app.js?v=12.0"></script>
 </body>
 </html>
