@@ -146,6 +146,7 @@ const SAMPLE_MENU_ITEMS = [
         imageUrl: "images/pizza.jpg",
         isVeg: true,
         isChefSpecial: true,
+        available: true,
         calories: "780 kcal"
     },
     {
@@ -170,6 +171,7 @@ const SAMPLE_MENU_ITEMS = [
         imageUrl: "images/pizza.jpg",
         isVeg: false,
         isChefSpecial: false,
+        available: false,
         calories: "920 kcal"
     },
     {
