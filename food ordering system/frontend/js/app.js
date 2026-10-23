@@ -1,5 +1,6 @@
 /**
  * QuickBite / FoodExpress - Core Web Application Logic
+ * Features: Multi-restaurant cart, cancel order with 50% refund, QR payment, food availability
  */
 
 const AppState = {
@@ -24,10 +25,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadRestaurants();
     updateCartUI();
     renderUserAuthStatus();
+    initCustomScrollRail();
 
     // Check if there is an active tracking order saved
     const savedOrders = ApiService.getSavedOrders();
-    if (savedOrders.length > 0 && savedOrders[0].status !== 'DELIVERED') {
+    if (savedOrders.length > 0 && savedOrders[0].status !== 'DELIVERED' && savedOrders[0].status !== 'CANCELLED') {
         AppState.activeOrder = savedOrders[0];
         startOrderSimulation(AppState.activeOrder);
     }
@@ -163,15 +165,20 @@ function renderMenuItems() {
     grid.innerHTML = AppState.menuItems.map(item => {
         const cartItem = AppState.cart.find(c => c.item.id === item.id);
         const qty = cartItem ? cartItem.quantity : 0;
+        // Availability: default to true if not set
+        const available = item.available !== false;
 
         return `
-            <div class="menu-item-card glass">
+            <div class="menu-item-card glass ${!available ? 'unavailable-card' : ''}">
                 <div class="menu-item-details">
                     <div class="item-badges">
                         <span class="veg-tag ${item.isVeg ? 'veg' : 'non-veg'}">
                             ${item.isVeg ? '● VEG' : '▲ NON-VEG'}
                         </span>
                         ${item.isChefSpecial ? '<span class="special-tag">★ CHEF SPECIAL</span>' : ''}
+                        <span class="availability-tag ${available ? 'available' : 'not-available'}">
+                            ${available ? '✔ Available' : '✘ Not Available'}
+                        </span>
                     </div>
                     <h3 class="menu-item-title">${item.name}</h3>
                     <p class="menu-item-desc">${item.description}</p>
@@ -183,7 +190,9 @@ function renderMenuItems() {
                                     ✏️ Edit
                                 </button>
                             ` : ''}
-                            ${qty === 0 ? `
+                            ${!available ? `
+                                <span class="btn-unavailable">Unavailable</span>
+                            ` : qty === 0 ? `
                                 <button class="btn-add-item" onclick="addToCart(${item.id})">+ ADD</button>
                             ` : `
                                 <div class="item-qty-control">
@@ -197,6 +206,7 @@ function renderMenuItems() {
                 </div>
                 <div class="menu-item-img-container">
                     <img src="${item.imageUrl || 'images/hero-banner.jpg'}" alt="${item.name}" class="menu-item-img" loading="lazy" onerror="this.onerror=null; this.src='images/hero-banner.jpg';">
+                    ${!available ? '<div class="img-unavailable-overlay">SOLD OUT</div>' : ''}
                 </div>
             </div>
         `;
@@ -210,22 +220,19 @@ function backToRestaurants() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// ── Cart Operations ───────────────────────────────────
+// ── Cart Operations (Multi-Restaurant support) ────────────────────
 function addToCart(itemId) {
     const item = AppState.menuItems.find(m => m.id === itemId) || 
                  SAMPLE_MENU_ITEMS.find(m => m.id === itemId);
     if (!item) return;
 
-    // Check if adding from different restaurant
-    if (AppState.cart.length > 0 && AppState.selectedRestaurant) {
-        if (AppState.cart[0].restaurantId !== AppState.selectedRestaurant.id) {
-            if (!confirm("Your cart contains dishes from another restaurant. Would you like to reset your cart to add this item?")) {
-                return;
-            }
-            AppState.cart = [];
-        }
+    // Check availability
+    if (item.available === false) {
+        showToast('This item is currently not available', 'info');
+        return;
     }
 
+    // Allow multi-restaurant ordering — no reset prompt
     const existing = AppState.cart.find(c => c.item.id === itemId);
     if (existing) {
         existing.quantity += 1;
@@ -274,11 +281,194 @@ function updateCartUI() {
     }
 
     renderCartDrawer();
+
+    // ALWAYS keep menu items in sync with current cart state so '+ ADD' is always correct!
+    if (AppState.selectedRestaurant) {
+        renderMenuItems();
+    }
+}
+
+function clearCart() {
+    AppState.cart = [];
+    AppState.appliedPromo = null;
+    saveCart();
+    updateCartUI();
+    showToast('🛒 Cart cleared. All menu items reset to + ADD', 'info');
+}
+
+// ── Global scroll helper — called by inline onclick on ▲/▼ buttons ────────
+window.scrollCartItems = function(delta) {
+    var c = document.getElementById('cart-items-container');
+    if (!c) return;
+
+    var maxScroll = c.scrollHeight - c.clientHeight;
+    if (maxScroll <= 0) {
+        c.style.transition = 'transform 0.12s ease';
+        c.style.transform = delta > 0 ? 'translateY(-6px)' : 'translateY(6px)';
+        setTimeout(function() { c.style.transform = ''; }, 140);
+        return;
+    }
+
+    var startTop = c.scrollTop;
+    c.scrollBy({ top: delta, behavior: 'smooth' });
+
+    setTimeout(function() {
+        if (delta > 0 && c.scrollTop <= startTop) {
+            c.scrollTop = Math.min(startTop + delta, maxScroll);
+        } else if (delta < 0 && c.scrollTop >= startTop) {
+            c.scrollTop = Math.max(0, startTop + delta);
+        }
+        if (window.updateCustomRailThumb) window.updateCustomRailThumb();
+    }, 120);
+};
+
+// Scroll helper for dishes list in Live Order Tracker
+window.scrollTrackerItems = function(delta) {
+    var c = document.getElementById('track-items-container');
+    if (!c) return;
+    c.scrollBy({ top: delta, behavior: 'smooth' });
+    var max = c.scrollHeight - c.clientHeight;
+    var fill = document.getElementById('tracker-scroll-fill');
+    if (max > 0 && fill) {
+        var pct = (c.scrollTop / max) * 100;
+        fill.style.width = Math.max(25, pct) + '%';
+    }
+};
+
+// ── Custom Scroll Rail (re-attaches every time cart drawer opens) ──────────
+function initCustomScrollRail() {
+    var container = document.getElementById('cart-items-container');
+    var rail      = document.getElementById('custom-scroll-rail');
+    var track     = document.getElementById('rail-track');
+    var thumb     = document.getElementById('rail-thumb');
+
+    if (!container || !rail || !track || !thumb) return;
+
+    // ── Thumb position sync ──
+    function updateRailThumb() {
+        var scrollH  = container.scrollHeight;
+        var clientH  = container.clientHeight;
+        var maxScroll = scrollH - clientH;
+        var trackH   = track.clientHeight;
+
+        var btnUp   = document.getElementById('rail-btn-up');
+        var btnDown = document.getElementById('rail-btn-down');
+
+        if (maxScroll <= 2 || trackH <= 0) {
+            thumb.style.display = 'none';
+            if (btnUp)   btnUp.style.opacity   = '0.4';
+            if (btnDown) btnDown.style.opacity = '0.4';
+            return;
+        }
+        thumb.style.display = 'block';
+        if (btnUp)   btnUp.style.opacity   = container.scrollTop > 5  ? '1' : '0.5';
+        if (btnDown) btnDown.style.opacity = container.scrollTop < maxScroll - 5 ? '1' : '0.5';
+
+        var thumbH   = Math.max(34, Math.min(trackH * (clientH / scrollH), trackH - 10));
+        var maxThumb = trackH - thumbH;
+        var thumbTop = maxScroll > 0 ? (container.scrollTop / maxScroll) * maxThumb : 0;
+
+        thumb.style.height = thumbH + 'px';
+        thumb.style.top    = thumbTop + 'px';
+    }
+    window.updateCustomRailThumb = updateRailThumb;
+
+    container.addEventListener('scroll', updateRailThumb);
+    rail.addEventListener('wheel', function(e) {
+        container.scrollTop += e.deltaY;
+        updateRailThumb();
+        e.preventDefault();
+    }, { passive: false });
+
+    // ── Thumb drag ──
+    thumb.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        var startY   = e.clientY;
+        var startTop = parseFloat(thumb.style.top) || 0;
+        document.body.style.userSelect = 'none';
+
+        function onMove(ev) {
+            var trackH  = track.clientHeight;
+            var thumbH  = thumb.clientHeight;
+            var maxTop  = trackH - thumbH;
+            var newTop  = Math.max(0, Math.min(startTop + (ev.clientY - startY), maxTop));
+            var maxSc   = container.scrollHeight - container.clientHeight;
+            thumb.style.top      = newTop + 'px';
+            container.scrollTop  = maxTop > 0 ? (newTop / maxTop) * maxSc : 0;
+        }
+        function onUp() {
+            document.body.style.userSelect = '';
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+        }
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+    });
+
+    // ── Track click-to-jump ──
+    track.addEventListener('mousedown', function(e) {
+        if (e.target === thumb) return;
+        var rect    = track.getBoundingClientRect();
+        var clickY  = e.clientY - rect.top;
+        var thumbH  = thumb.clientHeight;
+        var trackH  = track.clientHeight;
+        var maxTop  = trackH - thumbH;
+        var newTop  = Math.max(0, Math.min(clickY - thumbH / 2, maxTop));
+        var maxSc   = container.scrollHeight - container.clientHeight;
+        container.scrollTop = maxTop > 0 ? (newTop / maxTop) * maxSc : 0;
+        updateRailThumb();
+    });
+
+    // ── Press-and-hold on ▲/▼ buttons ──
+    var holdTimer    = null;
+    var holdInterval = null;
+
+    function startHold(delta) {
+        stopHold();
+        window.scrollCartItems(delta);
+        holdTimer = setTimeout(function() {
+            holdInterval = setInterval(function() {
+                window.scrollCartItems(delta);
+            }, 60);
+        }, 220);
+    }
+    function stopHold() {
+        clearTimeout(holdTimer);
+        clearInterval(holdInterval);
+    }
+
+    // Re-grab buttons each time
+    function bindRailBtns() {
+        var up   = document.getElementById('rail-btn-up');
+        var down = document.getElementById('rail-btn-down');
+        if (up) {
+            up.onclick = function() { window.scrollCartItems(-140); };
+            up.onmousedown = function() { startHold(-140); };
+            up.onmouseup = stopHold;
+            up.onmouseleave = stopHold;
+            up.ontouchstart = function() { startHold(-140); };
+            up.ontouchend = stopHold;
+        }
+        if (down) {
+            down.onclick = function() { window.scrollCartItems(140); };
+            down.onmousedown = function() { startHold(140); };
+            down.onmouseup = stopHold;
+            down.onmouseleave = stopHold;
+            down.ontouchstart = function() { startHold(140); };
+            down.ontouchend = stopHold;
+        }
+    }
+    bindRailBtns();
+    window._bindRailBtns = bindRailBtns;
+
+    setTimeout(updateRailThumb, 100);
 }
 
 function renderCartDrawer() {
     const container = document.getElementById('cart-items-container');
     const footer = document.getElementById('cart-footer');
+    const scrollBar = document.getElementById('cart-scroll-indicator-bar');
+    const scrollFill = document.getElementById('cart-scroll-line-fill');
     if (!container || !footer) return;
 
     if (AppState.cart.length === 0) {
@@ -290,24 +480,86 @@ function renderCartDrawer() {
             </div>
         `;
         footer.style.display = 'none';
+        const scrollHint = document.getElementById('cart-scroll-hint');
+        if (scrollHint) scrollHint.style.display = 'none';
+        if (scrollBar) scrollBar.style.display = 'none';
+        if (window.updateCustomRailThumb) window.updateCustomRailThumb();
         return;
     }
 
     footer.style.display = 'block';
-    container.innerHTML = AppState.cart.map(c => `
-        <div class="cart-item-row">
-            <img src="${c.item.imageUrl || 'images/hero-banner.jpg'}" alt="${c.item.name}" class="cart-item-thumb">
-            <div class="cart-item-meta">
-                <div class="cart-item-name">${c.item.name}</div>
-                <div class="cart-item-price">₹${(c.item.price * c.quantity).toFixed(0)}</div>
-            </div>
-            <div class="item-qty-control">
-                <button class="qty-btn" onclick="updateItemQuantity(${c.item.id}, -1)">-</button>
-                <span class="qty-num">${c.quantity}</span>
-                <button class="qty-btn" onclick="updateItemQuantity(${c.item.id}, 1)">+</button>
-            </div>
+
+    // Group cart items by restaurant
+    const byRestaurant = {};
+    AppState.cart.forEach(c => {
+        const rName = c.restaurantName || 'Restaurant';
+        if (!byRestaurant[rName]) byRestaurant[rName] = [];
+        byRestaurant[rName].push(c);
+    });
+
+    const scrollHint = document.getElementById('cart-scroll-hint');
+    if (scrollHint) {
+        const totalItems = AppState.cart.reduce((sum, c) => sum + c.quantity, 0);
+        const rCount = Object.keys(byRestaurant).length;
+        scrollHint.style.display = 'block';
+        if (totalItems > 1) {
+            scrollHint.innerText = `↕ Scroll down straight line to view all ${totalItems} items (${rCount} kitchen${rCount > 1 ? 's' : ''})`;
+        } else {
+            scrollHint.innerText = `↕ 1 item in your order`;
+        }
+    }
+
+    // Straight line scroll progress tracking & custom rail updates
+    container.onscroll = () => {
+        const maxScroll = container.scrollHeight - container.clientHeight;
+        if (maxScroll > 0 && scrollBar && scrollFill) {
+            scrollBar.style.display = 'block';
+            const pct = (container.scrollTop / maxScroll) * 100;
+            scrollFill.style.width = `${Math.max(15, pct)}%`;
+        }
+        if (window.updateCustomRailThumb) window.updateCustomRailThumb();
+    };
+
+    // Direct active wheel scrolling
+    container.onwheel = (e) => {
+        container.scrollTop += e.deltaY;
+        e.preventDefault();
+        if (window.updateCustomRailThumb) window.updateCustomRailThumb();
+    };
+
+    setTimeout(() => {
+        const maxScroll = container.scrollHeight - container.clientHeight;
+        if (maxScroll > 15 && scrollBar && scrollFill) {
+            scrollBar.style.display = 'block';
+            const pct = (container.scrollTop / maxScroll) * 100;
+            scrollFill.style.width = `${Math.max(15, pct)}%`;
+        } else if (scrollBar) {
+            scrollBar.style.display = 'none';
+        }
+        if (window.updateCustomRailThumb) window.updateCustomRailThumb();
+    }, 70);
+
+    const groupedHTML = Object.entries(byRestaurant).map(([rName, items]) => `
+        <div class="cart-restaurant-group">
+            <div class="cart-restaurant-label">🏪 ${rName}</div>
+            ${items.map(c => `
+                <div class="cart-item-row">
+                    <img src="${c.item.imageUrl || 'images/hero-banner.jpg'}" alt="${c.item.name}" class="cart-item-thumb">
+                    <div class="cart-item-meta">
+                        <div class="cart-item-name">${c.item.name}</div>
+                        <div class="cart-item-price">₹${(c.item.price * c.quantity).toFixed(0)}</div>
+                    </div>
+                    <div class="item-qty-control">
+                        <button class="qty-btn" onclick="updateItemQuantity(${c.item.id}, -1)">-</button>
+                        <span class="qty-num">${c.quantity}</span>
+                        <button class="qty-btn" onclick="updateItemQuantity(${c.item.id}, 1)">+</button>
+                    </div>
+                </div>
+            `).join('')}
         </div>
     `).join('');
+
+    container.innerHTML = groupedHTML;
 
     // Totals calculations
     const subtotal = AppState.cart.reduce((sum, c) => sum + (c.item.price * c.quantity), 0);
@@ -355,6 +607,10 @@ function toggleCartDrawer(open) {
     if (open) {
         backdrop.classList.add('open');
         drawer.classList.add('open');
+        setTimeout(() => {
+            initCustomScrollRail();
+            if (window.updateCustomRailThumb) window.updateCustomRailThumb();
+        }, 120);
     } else {
         backdrop.classList.remove('open');
         drawer.classList.remove('open');
@@ -368,81 +624,328 @@ function openCheckoutModal() {
         checkoutAddressInput.value = AppState.deliveryLocation;
     }
     document.getElementById('checkout-modal').classList.add('open');
+
+    // Automatically select UPI / GPay by default and render the real scannable QR code
+    const upiRadio = document.querySelector('input[name="payment"][value="upi"]');
+    if (upiRadio) {
+        upiRadio.checked = true;
+        onPaymentMethodChange(upiRadio);
+    }
+
+    // Default select "Ring bell" for delivery instructions
+    const bellRadio = document.querySelector('input[name="delivery_instruction"][value="Ring bell"]');
+    if (bellRadio) {
+        bellRadio.checked = true;
+        onDeliveryInstructionChange(bellRadio);
+    }
+}
+
+function onDeliveryInstructionChange(radio) {
+    const labels = ['inst-label-door', 'inst-label-bell', 'inst-label-contact'];
+    labels.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.remove('payment-active');
+    });
+
+    const parentLabel = radio.closest('.payment-label');
+    if (parentLabel) {
+        parentLabel.classList.add('payment-active');
+    }
+
+    const notesEl = document.getElementById('checkout-notes');
+    if (notesEl) {
+        notesEl.value = radio.value;
+    }
 }
 
 function closeCheckoutModal() {
     document.getElementById('checkout-modal').classList.remove('open');
 }
 
-// ── Submit Order ──────────────────────────────────────
-async function submitOrder(e) {
-    e.preventDefault();
-    const address = document.getElementById('checkout-address').value;
-    const notes = document.getElementById('checkout-notes').value;
-
-    if (!address.trim()) {
-        showToast('Please enter your delivery address', 'info');
-        return;
-    }
-
-    const subtotal = AppState.cart.reduce((sum, c) => sum + (c.item.price * c.quantity), 0);
-    const deliveryFee = subtotal > 399 ? 0.00 : 49.00;
-    const tax = subtotal * 0.05;
-    const totalAmount = subtotal + deliveryFee + tax;
-
-    const orderData = {
-        restaurantName: AppState.cart[0].restaurantName,
-        items: [...AppState.cart],
-        subtotal: subtotal,
-        deliveryFee: deliveryFee,
-        tax: tax,
-        totalAmount: totalAmount,
-        deliveryAddress: address,
-        notes: notes
-    };
-
-    const placedOrder = await ApiService.placeOrder(orderData);
-    AppState.activeOrder = placedOrder;
-
-    // Reset Cart
-    AppState.cart = [];
-    AppState.appliedPromo = null;
-    saveCart();
-    updateCartUI();
-
-    closeCheckoutModal();
-    showToast('🎉 Order placed successfully!', 'success');
-
-    // Open Live Tracker
-    openOrderTrackerModal(placedOrder);
-    startOrderSimulation(placedOrder);
+// ── QR Code Panel (shown when UPI online payment selected) ──
+function hideQRPanel() {
+    const qrPanel = document.getElementById('qr-payment-panel');
+    if (qrPanel) qrPanel.style.display = 'none';
 }
 
-// ── Live Order Tracker (Spring Boot OrderStatus State Machine) ──
+function renderUPIQRCode(amount) {
+    const box = document.getElementById('qr-code-box');
+    if (!box) return;
+
+    const formattedAmount = Number(amount || 0).toFixed(2);
+    // Standard NPCI UPI URI: scanned by Google Pay, PhonePe, Paytm, BHIM, etc.
+    const upiUri = `upi://pay?pa=quickbite@upi&pn=QuickBite%20Foods&am=${formattedAmount}&cu=INR&tn=Food%20Order`;
+
+    box.innerHTML = '';
+
+    if (typeof QRCode !== 'undefined') {
+        try {
+            new QRCode(box, {
+                text: upiUri,
+                width: 170,
+                height: 170,
+                colorDark: '#000000',
+                colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.M
+            });
+
+            // Remove duplicate img immediately if canvas exists
+            const immediateCanvas = box.querySelector('canvas');
+            const immediateImg = box.querySelector('img');
+            if (immediateCanvas && immediateImg) {
+                immediateImg.remove();
+            }
+
+            setTimeout(() => {
+                const canvas = box.querySelector('canvas');
+                const img = box.querySelector('img');
+                if (canvas) {
+                    canvas.style.borderRadius = 'var(--radius-md)';
+                    canvas.style.background = '#ffffff';
+                    canvas.style.padding = '8px';
+                    canvas.style.border = '2px solid var(--primary)';
+                    canvas.style.boxShadow = '0 0 16px var(--primary-glow)';
+                    canvas.style.display = 'block';
+                    canvas.style.margin = '0 auto';
+                    // Strictly guarantee ONLY ONE QR code is displayed
+                    if (img) img.remove();
+                } else if (img) {
+                    img.style.borderRadius = 'var(--radius-md)';
+                    img.style.background = '#ffffff';
+                    img.style.padding = '8px';
+                    img.style.border = '2px solid var(--primary)';
+                    img.style.boxShadow = '0 0 16px var(--primary-glow)';
+                    img.style.margin = '0 auto';
+                    img.style.display = 'block';
+                    img.style.width = '170px';
+                    img.style.height = '170px';
+                }
+            }, 10);
+            return;
+        } catch (err) {
+            console.warn('QRCode generation failed, falling back to dynamic image:', err);
+        }
+    }
+
+    // Dynamic QR server fallback with local failover
+    const fallbackImg = document.createElement('img');
+    fallbackImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=6&ecc=M&data=${encodeURIComponent(upiUri)}`;
+    fallbackImg.alt = 'UPI QR Code';
+    fallbackImg.className = 'qr-code-img';
+    fallbackImg.onerror = function() {
+        this.src = 'images/upi_qr.png';
+    };
+    box.appendChild(fallbackImg);
+}
+
+function onPaymentMethodChange(radio) {
+    const qrPanel = document.getElementById('qr-payment-panel');
+    const amountEl = document.getElementById('qr-amount-display');
+
+    // Move the orange active border to the selected payment label (UPI or Cash on Delivery)
+    const labels = ['pay-label-upi', 'pay-label-cod'];
+    labels.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.remove('payment-active');
+    });
+    const selectedLabel = document.getElementById(`pay-label-${radio.value}`);
+    if (selectedLabel) selectedLabel.classList.add('payment-active');
+
+    if (!qrPanel) return;
+
+    if (radio.value === 'upi') {
+        // Calculate exact total amount
+        const subtotal = AppState.cart.reduce((sum, c) => sum + (((c.item && c.item.price) || 0) * c.quantity), 0);
+        let deliveryFee = subtotal > 399 ? 0.00 : 49.00;
+        let discount = 0;
+        if (AppState.appliedPromo) {
+            if (AppState.appliedPromo.freeDelivery) {
+                deliveryFee = 0.00;
+            } else if (AppState.appliedPromo.discountPercent) {
+                discount = (subtotal * AppState.appliedPromo.discountPercent) / 100;
+            } else if (AppState.appliedPromo.discountAmount) {
+                discount = AppState.appliedPromo.discountAmount;
+            }
+        }
+        const tax = Math.max(0, subtotal - discount) * 0.05;
+        const grandTotal = Math.max(0, subtotal - discount + deliveryFee + tax);
+
+        if (amountEl) amountEl.innerText = `₹${grandTotal.toFixed(2)}`;
+        renderUPIQRCode(grandTotal);
+        qrPanel.style.display = 'block';
+    } else {
+        qrPanel.style.display = 'none';
+    }
+}
+
+// ── Submit Order ──────────────────────────────────────
+async function submitOrder(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    try {
+        const addressEl = document.getElementById('checkout-address');
+        const notesEl = document.getElementById('checkout-notes');
+        const address = addressEl ? addressEl.value.trim() : '';
+        const notes = notesEl ? notesEl.value.trim() : '';
+
+        if (!address) {
+            showToast('Please enter your delivery address', 'info');
+            return;
+        }
+
+        if (!AppState.cart || AppState.cart.length === 0) {
+            showToast('Your cart is empty. Please add items before checking out.', 'info');
+            closeCheckoutModal();
+            return;
+        }
+
+        const subtotal = AppState.cart.reduce((sum, c) => sum + (((c.item && c.item.price) || 0) * c.quantity), 0);
+        let deliveryFee = subtotal > 399 ? 0.00 : 49.00;
+        let discount = 0;
+
+        if (AppState.appliedPromo) {
+            if (AppState.appliedPromo.freeDelivery) {
+                deliveryFee = 0.00;
+            } else if (AppState.appliedPromo.discountPercent) {
+                discount = (subtotal * AppState.appliedPromo.discountPercent) / 100;
+            } else if (AppState.appliedPromo.discountAmount) {
+                discount = AppState.appliedPromo.discountAmount;
+            }
+        }
+
+        const tax = (subtotal - discount) * 0.05;
+        const totalAmount = Math.max(0, subtotal - discount + deliveryFee + tax);
+
+        // Build restaurant names from multi-restaurant cart
+        const restaurantNames = [...new Set(AppState.cart.map(c => c.restaurantName || 'Restaurant'))].join(' + ');
+
+        const orderData = {
+            restaurantName: restaurantNames,
+            items: JSON.parse(JSON.stringify(AppState.cart)),
+            subtotal: subtotal,
+            discount: discount,
+            deliveryFee: deliveryFee,
+            tax: tax,
+            totalAmount: totalAmount,
+            deliveryAddress: address,
+            notes: notes
+        };
+
+        const placedOrder = await ApiService.placeOrder(orderData);
+        AppState.activeOrder = placedOrder;
+
+        // Reset Cart
+        AppState.cart = [];
+        AppState.appliedPromo = null;
+        saveCart();
+        updateCartUI();
+
+        closeCheckoutModal();
+        showToast('🎉 Order placed successfully!', 'success');
+
+        // Open Live Tracker
+        openOrderTrackerModal(placedOrder);
+        startOrderSimulation(placedOrder);
+    } catch (err) {
+        console.error('Error in submitOrder:', err);
+        showToast('Error placing order. Please try again.', 'info');
+    }
+}
+
+// ── Live Order Tracker ──────────────────────────────────
 function openOrderTrackerModal(order) {
     const modal = document.getElementById('order-tracker-modal');
     renderOrderTracking(order);
-    modal.classList.add('open');
+    if (modal) modal.classList.add('open');
 }
 
 function closeOrderTrackerModal() {
-    document.getElementById('order-tracker-modal').classList.remove('open');
+    const modal = document.getElementById('order-tracker-modal');
+    if (modal) modal.classList.remove('open');
+    if (AppState.activeOrder && AppState.activeOrder.status === 'DELIVERED') {
+        AppState.cart = [];
+        AppState.appliedPromo = null;
+        saveCart();
+        updateCartUI();
+        if (AppState.selectedRestaurant) {
+            renderMenuItems();
+        }
+    }
 }
 
 function renderOrderTracking(order) {
     if (!order) return;
-    document.getElementById('track-order-id').innerText = order.id;
-    document.getElementById('track-restaurant').innerText = order.restaurantName || "Express Kitchen";
-    document.getElementById('track-address').innerText = order.deliveryAddress;
-    document.getElementById('track-total').innerText = `₹${(order.totalAmount || 0).toFixed(2)}`;
+    const orderIdEl = document.getElementById('track-order-id');
+    const rNameEl = document.getElementById('track-restaurant');
+    const addrEl = document.getElementById('track-address');
+    const totalEl = document.getElementById('track-total');
+    if (orderIdEl) orderIdEl.innerText = order.id || '#ORD-1001';
+    if (rNameEl) rNameEl.innerText = order.restaurantName || "Express Kitchen";
+    if (addrEl) addrEl.innerText = order.deliveryAddress || "Indiranagar, Bengaluru";
+    if (totalEl) totalEl.innerText = `₹${(order.totalAmount || 0).toFixed(2)}`;
 
     const statuses = ['PLACED', 'CONFIRMED', 'PREPARING', 'OUT_FOR_DELIVERY', 'DELIVERED'];
     const currentIdx = statuses.indexOf(order.status);
 
     const progressLine = document.getElementById('track-progress-line');
-    if (progressLine) {
-        const percent = (Math.max(0, currentIdx) / (statuses.length - 1)) * 100;
-        progressLine.style.width = `${percent}%`;
+    const runner = document.getElementById('delivery-runner');
+
+    if (currentIdx !== -1) {
+        const ratio = currentIdx / (statuses.length - 1);
+        if (progressLine) {
+            progressLine.style.width = `calc((100% - 40px) * ${ratio})`;
+        }
+        if (runner) {
+            if (order.status === 'CANCELLED') {
+                runner.style.display = 'none';
+            } else {
+                runner.style.display = 'flex';
+                runner.style.left = `calc(20px + (100% - 40px) * ${ratio})`;
+
+                const runnerIcon = runner.querySelector('.runner-icon');
+                const runnerPack = runner.querySelector('.runner-pack');
+                if (order.status === 'OUT_FOR_DELIVERY') {
+                    if (runnerIcon) runnerIcon.innerText = '🏃‍♂️';
+                    if (runnerPack) runnerPack.innerText = '🛵💨';
+                } else if (order.status === 'DELIVERED') {
+                    if (runnerIcon) runnerIcon.innerText = '🎉';
+                    if (runnerPack) runnerPack.innerText = '🍽️';
+                } else {
+                    if (runnerIcon) runnerIcon.innerText = '🏃‍♂️';
+                    if (runnerPack) runnerPack.innerText = '📦';
+                }
+            }
+        }
+    } else {
+        if (progressLine) progressLine.style.width = '0%';
+        if (runner) runner.style.display = 'none';
+    }
+
+    // Render ordered dishes inside tracker so customer can scroll to see what they ordered
+    const itemsContainer = document.getElementById('track-items-container');
+    const itemsCountEl = document.getElementById('tracker-items-count');
+    if (itemsContainer && order.items && order.items.length > 0) {
+        if (itemsCountEl) itemsCountEl.innerText = `(${order.items.length} item${order.items.length > 1 ? 's' : ''})`;
+        itemsContainer.innerHTML = order.items.map(c => `
+            <div class="tracker-dish-row">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <img src="${(c.item && c.item.imageUrl) || 'images/pizza.jpg'}" alt="${c.item ? c.item.name : 'Dish'}" style="width: 28px; height: 28px; border-radius: 4px; object-fit: cover;">
+                    <span style="font-weight: 600; color: #fff;">${c.item ? c.item.name : 'Item'} <strong style="color: var(--primary);">× ${c.quantity}</strong></span>
+                </div>
+                <span style="color: var(--accent-emerald); font-weight: 700;">₹${((c.item ? c.item.price : 0) * c.quantity).toFixed(0)}</span>
+            </div>
+        `).join('');
+
+        itemsContainer.onscroll = () => {
+            const max = itemsContainer.scrollHeight - itemsContainer.clientHeight;
+            const fill = document.getElementById('tracker-scroll-fill');
+            if (max > 0 && fill) {
+                const pct = (itemsContainer.scrollTop / max) * 100;
+                fill.style.width = `${Math.max(25, pct)}%`;
+            }
+        };
+    } else if (itemsContainer) {
+        if (itemsCountEl) itemsCountEl.innerText = '(0)';
+        itemsContainer.innerHTML = '<div style="font-size: 0.8rem; color: var(--text-muted); text-align: center; padding: 0.5rem;">Dishes in preparation</div>';
     }
 
     statuses.forEach((s, idx) => {
@@ -462,11 +965,98 @@ function renderOrderTracking(order) {
         'CONFIRMED': 'Restaurant accepted your order!',
         'PREPARING': 'Chef is preparing your fresh meal 🍳',
         'OUT_FOR_DELIVERY': 'Driver is heading your way with your food 🛵',
-        'DELIVERED': 'Delivered! Bon appétit! 🍽'
+        'DELIVERED': 'Delivered! Bon appétit! 🍽',
+        'CANCELLED': '❌ Order cancelled. Refund processing...'
     };
     if (statusMessage) {
         statusMessage.innerText = messages[order.status] || order.status;
     }
+
+    // Show/hide cancel button based on cancellable statuses (active before DELIVERED)
+    const cancelBtn = document.getElementById('btn-cancel-order');
+    if (cancelBtn) {
+        const cancellable = ['PLACED', 'CONFIRMED', 'PREPARING', 'OUT_FOR_DELIVERY'];
+        cancelBtn.style.display = cancellable.includes(order.status) ? 'block' : 'none';
+    }
+
+    // Show/hide delivered actions box
+    const deliveredBox = document.getElementById('delivered-actions-box');
+    if (deliveredBox) {
+        deliveredBox.style.display = order.status === 'DELIVERED' ? 'block' : 'none';
+    }
+
+    // Show/hide cancelled actions box with 50% refund
+    const cancelledBox = document.getElementById('cancelled-actions-box');
+    const refundEl = document.getElementById('track-refund-amount');
+    if (cancelledBox) {
+        if (order.status === 'CANCELLED') {
+            cancelledBox.style.display = 'block';
+            if (refundEl) {
+                const refund = ((order.totalAmount || 0) * 0.5).toFixed(2);
+                refundEl.innerText = `₹${refund}`;
+            }
+        } else {
+            cancelledBox.style.display = 'none';
+        }
+    }
+}
+
+// ── Cancel Order with 50% Refund ────────────────────
+function cancelOrder() {
+    if (!AppState.activeOrder) return;
+    const order = AppState.activeOrder;
+
+    const cancellable = ['PLACED', 'CONFIRMED', 'PREPARING', 'OUT_FOR_DELIVERY'];
+    if (!cancellable.includes(order.status)) {
+        showToast('Order cannot be cancelled at this stage', 'info');
+        return;
+    }
+
+    // Open the cancel confirmation modal
+    const refundAmount = ((order.totalAmount || 0) * 0.5).toFixed(2);
+    const refundEl = document.getElementById('cancel-refund-amount');
+    const orderIdEl = document.getElementById('cancel-order-id');
+    if (refundEl) refundEl.innerText = `₹${refundAmount}`;
+    if (orderIdEl) orderIdEl.innerText = order.id || '#ORD';
+    const cancelModal = document.getElementById('cancel-confirm-modal');
+    if (cancelModal) cancelModal.classList.add('open');
+}
+
+function closeCancelModal() {
+    const cancelModal = document.getElementById('cancel-confirm-modal');
+    if (cancelModal) cancelModal.classList.remove('open');
+}
+
+function confirmCancelOrder() {
+    if (!AppState.activeOrder) return;
+    const order = AppState.activeOrder;
+    const refundAmount = ((order.totalAmount || 0) * 0.5).toFixed(2);
+
+    order.status = 'CANCELLED';
+    order.refundAmount = refundAmount;
+    if (AppState.orderTimer) clearInterval(AppState.orderTimer);
+
+    // Update localStorage
+    const orders = ApiService.getSavedOrders();
+    const idx = orders.findIndex(o => o.id === order.id);
+    if (idx !== -1) {
+        orders[idx].status = 'CANCELLED';
+        orders[idx].refundAmount = refundAmount;
+        localStorage.setItem('food_orders', JSON.stringify(orders));
+    }
+
+    // Reset dishes so customer can order again
+    AppState.cart = [];
+    AppState.appliedPromo = null;
+    saveCart();
+    updateCartUI();
+    if (AppState.selectedRestaurant) {
+        renderMenuItems();
+    }
+
+    renderOrderTracking(order);
+    closeCancelModal();
+    showToast(`❌ Order cancelled. ₹${refundAmount} (50% refund) credited to your account.`, 'success');
 }
 
 function startOrderSimulation(order) {
@@ -475,6 +1065,10 @@ function startOrderSimulation(order) {
     const statuses = ['PLACED', 'CONFIRMED', 'PREPARING', 'OUT_FOR_DELIVERY', 'DELIVERED'];
     
     AppState.orderTimer = setInterval(() => {
+        if (order.status === 'CANCELLED') {
+            clearInterval(AppState.orderTimer);
+            return;
+        }
         const currentIdx = statuses.indexOf(order.status);
         if (currentIdx < statuses.length - 1) {
             order.status = statuses[currentIdx + 1];
@@ -489,7 +1083,16 @@ function startOrderSimulation(order) {
             }
 
             if (order.status === 'DELIVERED') {
-                showToast(`Order ${order.id} has been delivered!`, 'success');
+                // Food was delivered! Reset cart and dishes to '+ ADD'
+                AppState.cart = [];
+                AppState.appliedPromo = null;
+                saveCart();
+                updateCartUI();
+                if (AppState.selectedRestaurant) {
+                    renderMenuItems();
+                }
+
+                showToast(`🎉 Order ${order.id} has been delivered! Dishes now reset to + ADD for your next order.`, 'success');
                 clearInterval(AppState.orderTimer);
             }
         } else {
@@ -498,20 +1101,14 @@ function startOrderSimulation(order) {
     }, 12000); // Progresses step every 12 seconds in demo
 }
 
-// ── User Auth & Modal ─────────────────────────────────
+// ── User Auth & Modal (Admin-only Sign In) ─────────────
 function openAuthModal() {
-    const emailInput = document.getElementById('auth-email');
-    const pwdInput = document.getElementById('auth-password');
-    const icon = document.getElementById('toggle-pwd-icon');
-    
-    // Clear fields to keep credentials private
-    if (emailInput) emailInput.value = '';
-    if (pwdInput) {
-        pwdInput.value = '';
-        pwdInput.type = 'password';
-    }
+    const idInput = document.getElementById('admin-id-input');
+    const pwdInput = document.getElementById('admin-pwd-input');
+    const icon = document.getElementById('admin-pwd-icon');
+    if (idInput) idInput.value = '';
+    if (pwdInput) { pwdInput.value = ''; pwdInput.type = 'password'; }
     if (icon) icon.innerText = '👁️';
-
     document.getElementById('auth-modal').classList.add('open');
 }
 
@@ -519,17 +1116,45 @@ function closeAuthModal() {
     document.getElementById('auth-modal').classList.remove('open');
 }
 
-function togglePasswordVisibility() {
-    const pwdInput = document.getElementById('auth-password');
-    const icon = document.getElementById('toggle-pwd-icon');
+function toggleAdminPwd() {
+    const pwdInput = document.getElementById('admin-pwd-input');
+    const icon = document.getElementById('admin-pwd-icon');
     if (!pwdInput) return;
-
     if (pwdInput.type === 'password') {
         pwdInput.type = 'text';
         if (icon) icon.innerText = '🔒';
     } else {
         pwdInput.type = 'password';
         if (icon) icon.innerText = '👁️';
+    }
+}
+
+// Keep old togglePasswordVisibility for backward compat
+function togglePasswordVisibility() { toggleAdminPwd(); }
+
+async function submitAdminLogin(e) {
+    if (e) e.preventDefault();
+    const adminId = (document.getElementById('admin-id-input').value || '').trim();
+    const password = (document.getElementById('admin-pwd-input').value || '').trim();
+
+    if (!adminId || !password) {
+        showToast('Please enter both Admin ID and Password', 'info');
+        return;
+    }
+
+    const res = await ApiService.login(adminId, password);
+    if (res.success && isUserAdmin()) {
+        renderUserAuthStatus();
+        renderAdminControls();
+        renderRestaurants();
+        if (AppState.selectedRestaurant) {
+            renderMenuHeader();
+            renderMenuItems();
+        }
+        closeAuthModal();
+        showToast(`✅ Successfully signed in as 👑 Admin!`, 'success');
+    } else {
+        showToast(res.message || '❌ Invalid Admin ID or Password. Please try again.', 'info');
     }
 }
 
@@ -621,17 +1246,17 @@ function renderUserAuthStatus() {
     const container = document.getElementById('user-nav-action');
     if (!container) return;
 
-    if (ApiService.currentUser) {
-        const isAdmin = isUserAdmin();
+    if (isUserAdmin()) {
         container.innerHTML = `
-            <button class="btn-nav-orders" onclick="handleLogout()" title="Click to logout" style="${isAdmin ? 'border-color: #8b5cf6; background: rgba(139, 92, 246, 0.15); color: #c4b5fd;' : ''}">
-                ${isAdmin ? '👑' : '👤'} ${ApiService.currentUser.name} (Logout)
+            <button class="btn-nav-orders" onclick="handleLogout()" title="Click to logout" style="border-color: #8b5cf6; background: rgba(139, 92, 246, 0.15); color: #c4b5fd;">
+                👑 ${ApiService.currentUser.name || 'Admin'} (Logout)
             </button>
         `;
     } else {
+        // ALWAYS show Admin Login button when not authenticated as admin!
         container.innerHTML = `
-            <button class="btn-nav-orders" onclick="openAuthModal()">
-                Sign In
+            <button class="btn-nav-orders" onclick="openAuthModal()" title="Admin login with ID & Password">
+                👑 Admin Login
             </button>
         `;
     }
@@ -769,7 +1394,7 @@ async function handleSaveRestaurant(e) {
     showToast(id ? `Updated "${name}" successfully!` : `Added "${name}" to restaurants!`);
 }
 
-// ── Admin Menu Item Management (Inside Restaurant) ────────────────
+// ── Admin Menu Item Management ────────────────────────
 function openAddMenuItemModal() {
     if (!isUserAdmin()) {
         showToast('🔒 Only an Admin can add dishes. Please log in as Admin.', 'info');
@@ -786,6 +1411,7 @@ function openAddMenuItemModal() {
     document.getElementById('edit-item-image').value = '';
     document.getElementById('edit-item-is-veg').checked = true;
     document.getElementById('edit-item-is-special').checked = false;
+    document.getElementById('edit-item-available').checked = true;
 
     const delBtn = document.getElementById('btn-delete-menu-item');
     if (delBtn) delBtn.style.display = 'none';
@@ -816,6 +1442,7 @@ function openEditMenuItemModal(itemId) {
     document.getElementById('edit-item-image').value = item.imageUrl || '';
     document.getElementById('edit-item-is-veg').checked = Boolean(item.isVeg);
     document.getElementById('edit-item-is-special').checked = Boolean(item.isChefSpecial);
+    document.getElementById('edit-item-available').checked = item.available !== false;
 
     const delBtn = document.getElementById('btn-delete-menu-item');
     if (delBtn) delBtn.style.display = 'inline-block';
@@ -850,6 +1477,7 @@ async function handleSaveMenuItem(e) {
     const imageUrl = document.getElementById('edit-item-image').value.trim();
     const isVeg = document.getElementById('edit-item-is-veg').checked;
     const isChefSpecial = document.getElementById('edit-item-is-special').checked;
+    const available = document.getElementById('edit-item-available').checked;
 
     const dishData = {
         name,
@@ -859,6 +1487,7 @@ async function handleSaveMenuItem(e) {
         imageUrl: imageUrl || (isVeg ? 'images/salad.jpg' : 'images/burger.jpg'),
         isVeg,
         isChefSpecial,
+        available,
         restaurantId: AppState.selectedRestaurant.id
     };
 
@@ -961,4 +1590,3 @@ function useCurrentGpsLocation() {
         saveDeliveryLocation('Indiranagar 100ft Road, Bengaluru');
     }
 }
-
